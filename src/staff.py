@@ -70,7 +70,7 @@ def group_into_staves(staff_line_rows):
     if current_staff:
         staves.append(current_staff)
 
-    # build staff metadata
+    # staff metadata
     staff_metadata = []
     for staff in staves:
         if len(staff) == 5:
@@ -115,8 +115,8 @@ def group_into_systems(staves):
         # use the midpoint between min and max as the threshold
         threshold = (min_gap + max_gap) / 2
     else:
-        # all gaps are similar: each staff is its own system
-        threshold = 0  # no gap will be below 0, so no pairing happens
+        # all gaps are similar so each staff is its own system
+        threshold = 0
 
     # group staves into systems
     systems = [[0]]

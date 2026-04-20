@@ -168,7 +168,6 @@ if __name__ == "__main__":
         print("Usage: python segment.py <image_path>")
         sys.exit(1)
 
-    # run full pipeline up to segmentation
     binary = binarize(sys.argv[1])
     staff_line_rows = detect_staff_lines(binary)
     staves = group_into_staves(staff_line_rows)
