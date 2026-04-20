@@ -8,10 +8,9 @@ from torchvision import transforms
 from PIL import Image
 from cnn_architecture import MusicCNN
 
-# Use same transform as one used during CNN training
-transform = transforms.Compose([
-    transforms.Grayscale(),
-    transforms.Resize((64, 64)),
+TARGET_SIZE = (64, 64)
+
+normalize = transforms.Compose([
     transforms.ToTensor(),
     transforms.Normalize([0.5], [0.5]),
 ])
@@ -26,6 +25,44 @@ IDX_TO_CLASS = {
     5: "quarter_rest",
     6: "whole_note"
 }
+
+def preprocess_crop(image):
+    """
+    Resize a cropped symbol image to TARGET_SIZE preserving aspect ratio,
+    centered on a white canvas. Matches the training data preprocessing.
+    Input: numpy array (H x W), values 0 and 255
+    Output: PIL Image ready for normalization
+    """
+    pil_img = Image.fromarray(image).convert("L")
+
+    # crop to non-white pixels
+    bbox = pil_img.getbbox()
+    if bbox:
+        pil_img = pil_img.crop(bbox)
+
+    # scale to fit within target size with margin
+    margin = 4
+    max_w = TARGET_SIZE[0] - 2 * margin
+    max_h = TARGET_SIZE[1] - 2 * margin
+    w, h = pil_img.size
+    if w == 0 or h == 0:
+        return Image.new("L", TARGET_SIZE, 255)
+
+    scale = min(max_w / w, max_h / h)
+    new_w = max(1, int(w * scale))
+    new_h = max(1, int(h * scale))
+    resized = pil_img.resize((new_w, new_h), Image.LANCZOS)
+
+    # center on white canvas
+    canvas = Image.new("L", TARGET_SIZE, 255)
+    paste_x = (TARGET_SIZE[0] - new_w) // 2
+    paste_y = (TARGET_SIZE[1] - new_h) // 2
+    canvas.paste(resized, (paste_x, paste_y))
+
+    # binarize to match training data
+    canvas = canvas.point(lambda p: 0 if p < 180 else 255)
+
+    return canvas
 
 def load_model(model_path="music_cnn.pt"):
     """Load the trained CNN from disk and set to eval mode."""
@@ -42,12 +79,13 @@ def classify_symbols(symbols, model, device):
     """
     results = []
 
-    for sym in symbols:
-        # Convert numpy array (H×W, values 0/255) to PIL Image
-        pil_img = Image.fromarray(sym["image"])
 
-        # Apply the same transform used during training
-        tensor = transform(pil_img).unsqueeze(0).to(device)
+    for sym in symbols:
+        # preprocess to match training data format
+        pil_img = preprocess_crop(sym["image"])
+
+        # Apply the normalize
+        tensor = normalize(pil_img).unsqueeze(0).to(device)
 
         with torch.no_grad():
             logits = model(tensor)
@@ -90,7 +128,7 @@ if __name__ == "__main__":
     print(f"Segmented {len(symbols)} symbols\n")
 
     # Load model and classify symbols
-    model, device = load_model("music_cnn.pt")
+    model, device = load_model("src/music_cnn.pt")
     results = classify_symbols(symbols, model, device)
 
     # Print results

@@ -12,7 +12,7 @@ def find_symbols(cleaned, staves):
     bounding boxes and metadata for each blob.
     Returns a list of raw symbol candidates.
     """
-    # invert so blobs are white on black
+    # invert so blobs are white on black (OpenCV expects this for findContours)
     inverted = cv2.bitwise_not(cleaned)
 
     contours, _ = cv2.findContours(inverted, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
@@ -33,6 +33,69 @@ def find_symbols(cleaned, staves):
         })
 
     return candidates
+
+
+def merge_nearby_fragments(candidates, avg_spacing):
+    """
+    Merge small blobs that are vertically close and at similar x positions.
+    These are likely fragments of hollow note heads broken by staff line removal.
+    """
+    if not candidates:
+        return candidates
+
+    # sort by x position
+    candidates.sort(key=lambda c: c["x"])
+    merged = []
+    used = set()
+
+    for i, c1 in enumerate(candidates):
+        if i in used:
+            continue
+
+        x1, y1, w1, h1 = c1["bbox"]
+        group = [i]
+
+        for j, c2 in enumerate(candidates):
+            if j <= i or j in used:
+                continue
+
+            x2, y2, w2, h2 = c2["bbox"]
+
+            # check if horizontally close and vertically nearby
+            x_overlap = abs(c1["x"] - c2["x"]) < avg_spacing
+            y_close = abs(c1["y"] - c2["y"]) < avg_spacing * 2
+            both_small = c1["area"] < avg_spacing * avg_spacing and c2["area"] < avg_spacing * avg_spacing
+
+            if x_overlap and y_close and both_small:
+                group.append(j)
+                used.add(j)
+
+        if len(group) > 1:
+            # merge bounding boxes
+            all_x = [candidates[g]["bbox"][0] for g in group]
+            all_y = [candidates[g]["bbox"][1] for g in group]
+            all_r = [candidates[g]["bbox"][0] + candidates[g]["bbox"][2] for g in group]
+            all_b = [candidates[g]["bbox"][1] + candidates[g]["bbox"][3] for g in group]
+
+            new_x = min(all_x)
+            new_y = min(all_y)
+            new_w = max(all_r) - new_x
+            new_h = max(all_b) - new_y
+            total_area = sum(candidates[g]["area"] for g in group)
+
+            merged.append({
+                "x": new_x + new_w // 2,
+                "y": new_y + new_h // 2,
+                "bbox": (new_x, new_y, new_w, new_h),
+                "area": total_area,
+                "contour": candidates[group[0]]["contour"],
+            })
+        else:
+            merged.append(c1)
+
+        used.add(i)
+
+    return merged
 
 
 def assign_to_staff(candidate, staves):
@@ -71,27 +134,38 @@ def filter_symbols(candidates, staves, cleaned):
     avg_spacing = np.mean([s["spacing"] for s in staves])
     img_h, img_w = cleaned.shape
 
+    # merge nearby fragments (broken hollow note heads)
+    candidates = merge_nearby_fragments(candidates, avg_spacing)
+
     symbols = []
 
     for cand in candidates:
         x, y, w, h = cand["bbox"]
 
-        # discard very small blobs
+        # size filtering: discard very small blobs (noise)
         if cand["area"] < avg_spacing * 2:
             continue
 
-        # discard very large blobs
+        # size filtering: discard very large blobs
         if cand["area"] > avg_spacing * avg_spacing * 20:
             continue
 
-        # discard very tall thin blobs
+        # aspect ratio filtering: discard very tall thin blobs (bar lines)
         if h > avg_spacing * 4 and w < avg_spacing:
+            continue
+
+        # aspect ratio filtering: discard wide horizontal fragments (staff line remnants)
+        if w > avg_spacing * 3 and h < avg_spacing:
+            continue
+
+        # width filtering: discard very wide blobs (clefs, time signatures, braces)
+        if w > avg_spacing * 2.5:
             continue
 
         # assign to a staff
         staff_idx = assign_to_staff(cand, staves)
 
-        # discard if not close to any staff
+        # discard if not close to any staff (title, lyrics, etc.)
         if staff_idx == -1:
             continue
 
@@ -99,20 +173,19 @@ def filter_symbols(candidates, staves, cleaned):
         if staves[staff_idx].get("clef") == "bass":
             continue
 
-        # discard symbols at far left
+        # position filtering: discard symbols at far left (clefs, time signatures)
         staff = staves[staff_idx]
         staff_top = staff["lines"][0]
         staff_bottom = staff["lines"][-1]
 
-        # clefs and time signatures are typically in the first 15% of the image width
         if x < img_w * 0.12:
             continue
 
-        # discard symbols clearly above the staff
+        # position filtering: discard symbols clearly above the staff (chord labels, note letters)
         if y + h < staff_top - avg_spacing * 2:
             continue
 
-        # discard symbols clearly below the staff
+        # position filtering: discard symbols clearly below the staff (lyrics)
         if y > staff_bottom + avg_spacing * 2:
             continue
 
@@ -168,6 +241,7 @@ if __name__ == "__main__":
         print("Usage: python segment.py <image_path>")
         sys.exit(1)
 
+    # run full pipeline up to segmentation
     binary = binarize(sys.argv[1])
     staff_line_rows = detect_staff_lines(binary)
     staves = group_into_staves(staff_line_rows)
