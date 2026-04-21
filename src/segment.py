@@ -12,7 +12,7 @@ def find_symbols(cleaned, staves):
     bounding boxes and metadata for each blob.
     Returns a list of raw symbol candidates.
     """
-    # invert so blobs are white on black (OpenCV expects this for findContours)
+    # invert so blobs are white on black
     inverted = cv2.bitwise_not(cleaned)
 
     contours, _ = cv2.findContours(inverted, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
@@ -134,7 +134,7 @@ def filter_symbols(candidates, staves, cleaned):
     avg_spacing = np.mean([s["spacing"] for s in staves])
     img_h, img_w = cleaned.shape
 
-    # merge nearby fragments (broken hollow note heads)
+    # merge nearby fragments
     candidates = merge_nearby_fragments(candidates, avg_spacing)
 
     symbols = []
@@ -142,30 +142,30 @@ def filter_symbols(candidates, staves, cleaned):
     for cand in candidates:
         x, y, w, h = cand["bbox"]
 
-        # size filtering: discard very small blobs (noise)
+        # discard very small blobs
         if cand["area"] < avg_spacing * 2:
             continue
 
-        # size filtering: discard very large blobs
+        # discard very large blobs
         if cand["area"] > avg_spacing * avg_spacing * 20:
             continue
 
-        # aspect ratio filtering: discard very tall thin blobs (bar lines)
+        # discard very tall thin blobs
         if h > avg_spacing * 4 and w < avg_spacing:
             continue
 
-        # aspect ratio filtering: discard wide horizontal fragments (staff line remnants)
+        # discard wide horizontal fragments
         if w > avg_spacing * 3 and h < avg_spacing:
             continue
 
-        # width filtering: discard very wide blobs (clefs, time signatures, braces)
+        # discard very wide blobs
         if w > avg_spacing * 2.5:
             continue
 
         # assign to a staff
         staff_idx = assign_to_staff(cand, staves)
 
-        # discard if not close to any staff (title, lyrics, etc.)
+        # discard if not close to any staff
         if staff_idx == -1:
             continue
 
@@ -173,7 +173,7 @@ def filter_symbols(candidates, staves, cleaned):
         if staves[staff_idx].get("clef") == "bass":
             continue
 
-        # position filtering: discard symbols at far left (clefs, time signatures)
+        # discard symbols at far left
         staff = staves[staff_idx]
         staff_top = staff["lines"][0]
         staff_bottom = staff["lines"][-1]
@@ -181,11 +181,11 @@ def filter_symbols(candidates, staves, cleaned):
         if x < img_w * 0.12:
             continue
 
-        # position filtering: discard symbols clearly above the staff (chord labels, note letters)
+        # discard symbols clearly above the staff
         if y + h < staff_top - avg_spacing * 2:
             continue
 
-        # position filtering: discard symbols clearly below the staff (lyrics)
+        # discard symbols clearly below the staff
         if y > staff_bottom + avg_spacing * 2:
             continue
 
@@ -206,7 +206,7 @@ def filter_symbols(candidates, staves, cleaned):
             "system_index": staves[staff_idx]["system_index"],
         })
 
-    # sort by system index, then by x position (reading order)
+    # sort by system index, then by x position
     symbols.sort(key=lambda s: (s["system_index"], s["x"]))
 
     return symbols
